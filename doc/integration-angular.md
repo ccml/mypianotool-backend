@@ -58,19 +58,14 @@ export const environment = {
 };
 ```
 
-En production, faire passer `/omr` par `server-hybrid.js` (ou par le reverse proxy
-qui est devant) évite complètement le CORS et le certificat séparé :
+En production, `/omr` est porté par **Nginx Proxy Manager**, le reverse proxy qui
+est déjà devant le site : une *custom location* sur le Proxy Host existant, avec une
+réécriture pour retirer le préfixe. Pas de proxy à ajouter dans `server-hybrid.js`,
+donc pas de dépendance de plus. Le pas à pas est dans
+[`deploiement.md`](deploiement.md).
 
-```js
-// server-hybrid.js
-const { createProxyMiddleware } = require('http-proxy-middleware');
-app.use('/omr', createProxyMiddleware({
-  target: process.env.OMR_URL || 'http://127.0.0.1:8077',
-  changeOrigin: true,
-  pathRewrite: { '^/omr': '' },
-  proxyTimeout: 20 * 60 * 1000   // un scan peut durer plusieurs minutes
-}));
-```
+Même domaine, donc aucun en-tête CORS n'entre en jeu — c'est la raison principale de
+ce choix plutôt qu'un sous-domaine.
 
 ## Le service
 

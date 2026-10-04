@@ -210,9 +210,12 @@ est bonne : cela, seule une vraie photo le dira.
 ## Mise en production
 
 Le service n'a **aucune authentification** : il n'est pas fait pour être exposé
-directement. Le mettre derrière le reverse proxy du site, sur un chemin dédié
-(`/omr`), ce qui règle aussi le CORS et le certificat. Voir
-[`doc/integration-angular.md`](doc/integration-angular.md).
+directement. Il se met derrière le reverse proxy du site, sur un chemin dédié
+(`/omr`), ce qui règle aussi le CORS et le certificat.
+
+- [`doc/deploiement.md`](doc/deploiement.md) — le pas à pas pour le serveur :
+  image, service Compose, route dans Nginx Proxy Manager, mémoire à prévoir.
+- [`doc/integration-angular.md`](doc/integration-angular.md) — le côté site.
 
 Prévoir du processeur **et de la mémoire** : une page occupe un cœur pendant une à
 plusieurs minutes, et la JVM demande jusqu'à 3 Go (`MPT_AUDIVERIS_MEMOIRE`).
