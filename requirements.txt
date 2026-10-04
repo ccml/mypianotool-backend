@@ -1,0 +1,16 @@
+# Service HTTP
+starlette>=0.47,<2
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+
+# Préparation des images
+pillow>=10.3
+pillow-heif>=0.16        # photos iPhone (.heic) non converties à l'envoi
+pypdfium2>=4.30          # première page d'un PDF scanné
+
+# La reconnaissance elle-même n'est pas un paquet Python : le moteur par défaut
+# est Audiveris, en Java, appelé en sous-processus. Il s'installe soit par
+# l'image Docker (qui le compile), soit à la main, et son chemin se donne par
+# MPT_AUDIVERIS_CMD.
+#
+# Pour réessayer oemer : pip install -r requirements-oemer.txt

@@ -1,0 +1,7 @@
+# De quoi faire tourner le service en moteur factice et lancer les tests,
+# sans installer oemer ni ses 600 Mo de dépendances.
+starlette>=0.47,<2
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+pillow>=10.3
+pytest>=8.0

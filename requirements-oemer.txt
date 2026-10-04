@@ -1,0 +1,12 @@
+# Moteur oemer — conservé mais plus utilisé par défaut : sur les photos d'essai
+# du 4 octobre 2026, il n'a rien rendu d'exploitable. Audiveris l'a remplacé.
+#
+#   pip install -r requirements.txt -r requirements-oemer.txt
+#   python scripts/telecharger-modeles.py
+#   MPT_MOTEUR=oemer uvicorn app.main:app
+#
+# Sur une machine sans carte graphique, installer onnxruntime AVANT oemer :
+# oemer réclame onnxruntime-gpu dès qu'on n'est pas sous macOS, et ce paquet
+# n'existe pas pour linux/arm64.
+onnxruntime
+oemer>=0.1.7
