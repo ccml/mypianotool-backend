@@ -217,6 +217,12 @@ def lancer_serveur(dossier: str) -> subprocess.Popen:
             "MPT_DOSSIER_TRAVAUX": dossier,
             "MPT_LIMITE_IP_PAR_HEURE": "15",
             "MPT_FILE_MAX": "20",
+            # Quotas du relais neutralisés : un test qui éprouve expressément un
+            # mauvais code ferait sinon tomber en 429 celui qui le suit, et
+            # l'ordre des fichiers déciderait du résultat. Ils sont éprouvés
+            # dans `test_relais.py`, en direct sur la classe.
+            "MPT_RELAIS_ESSAIS_PAR_HEURE": "0",
+            "MPT_RELAIS_DEPOTS_PAR_HEURE": "0",
             "PYTHONPATH": str(RACINE),
         }
     )

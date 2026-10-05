@@ -142,6 +142,39 @@ curl -s https://exemple.be/omr/api/sante | python3 -m json.tool
 Puis, dans le site, la fenêtre « Scanner » doit proposer de choisir une photo au
 lieu d'annoncer un service indisponible.
 
+## Le relais de partage — ce qui change, et ce qui ne change pas
+
+Rien à ajouter au déploiement. La route `/omr` déjà décrite ci-dessus porte
+`/api/relais` comme elle porte `/api/scans`, et `client_max_body_size 30m`
+couvre largement les 8 Mo du relais. Pas de volume, pas de port, pas de
+sous-domaine.
+
+Deux choses restent à faire, et elles sont faciles à oublier :
+
+1. **Republier les deux images.** Le relais est dans l'image du backend, et
+   `apiBackend` est compilé dans le bundle Angular du site.
+2. **Rien d'autre.** En particulier, `mem_limit: 4g` n'a pas à bouger : le
+   relais tient cent partitions en mémoire pour 64 Mo au plus, à comparer aux
+   3 Go que la JVM d'Audiveris demande sur une page dense.
+
+Une fois en place, la vérification tient en trois commandes depuis l'extérieur :
+
+```bash
+curl -s https://VOTRE-DOMAINE/omr/api/sante | python3 -m json.tool
+# → "relais": {"actif": true, "ttlS": 180, …}
+
+printf 'coucou' | curl -s -X POST https://VOTRE-DOMAINE/omr/api/relais \
+  -H 'X-Code: 4271' --data-binary @-
+# → {"code":"4271","jeton":"…","octets":6,"resteS":180}
+
+curl -s https://VOTRE-DOMAINE/omr/api/relais/4271    # → coucou
+curl -s -o /dev/null -w '%{http_code}\n' \
+     https://VOTRE-DOMAINE/omr/api/relais/4271       # → 404, usage unique
+```
+
+Si le dépôt répond `404`, c'est la réécriture du préfixe `/omr` qui manque — le
+même symptôme, et le même remède, que pour `/api/scans`.
+
 ## Ce qu'il faut surveiller
 
 - **La mémoire.** Un scan ouvre une JVM à 3 Go. `mem_limit: 4g` empêche le conteneur

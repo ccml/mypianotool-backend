@@ -22,6 +22,13 @@ def _texte(nom: str, defaut: str) -> str:
     return defaut if valeur is None or valeur.strip() == "" else valeur.strip()
 
 
+def _booleen(nom: str, defaut: bool) -> bool:
+    valeur = os.environ.get(nom)
+    if valeur is None or valeur.strip() == "":
+        return defaut
+    return valeur.strip().lower() not in ("0", "non", "false", "off")
+
+
 def _liste(nom: str, defaut: list[str]) -> list[str]:
     valeur = os.environ.get(nom)
     if valeur is None or valeur.strip() == "":
@@ -71,9 +78,42 @@ class Config:
 
     limite_ip_par_heure: int = field(default_factory=lambda: _entier("MPT_LIMITE_IP_PAR_HEURE", 20))
 
+    # --- Relais de partage entre appareils -------------------------------
+    # Rien de tout cela ne touche le disque : voir `app/relais.py`.
+
+    relais_actif: bool = field(default_factory=lambda: _booleen("MPT_RELAIS", True))
+
+    # Durée de vie d'une partition déposée. Au-delà, le transfert est annulé.
+    relais_ttl_s: int = field(default_factory=lambda: _entier("MPT_RELAIS_TTL_S", 180))
+
+    # Même plafond que `MAX_OCTETS` du site (`partage/transfert.ts`) : une
+    # partition du modèle, comprimée, fait quelques kilo-octets.
+    relais_taille_max_mo: int = field(
+        default_factory=lambda: _entier("MPT_RELAIS_TAILLE_MAX_MO", 8)
+    )
+
+    # Bornes de la mémoire : un service sans authentification doit savoir dire non.
+    relais_max_attentes: int = field(default_factory=lambda: _entier("MPT_RELAIS_MAX_ATTENTES", 100))
+    relais_octets_max_total: int = field(
+        default_factory=lambda: _entier("MPT_RELAIS_OCTETS_MAX_TOTAL", 64 * 1024 * 1024)
+    )
+
+    # Codes erronés tolérés par heure et par adresse : c'est ce qui rend
+    # inexploitable l'énumération des 10 000 codes possibles.
+    relais_essais_par_heure: int = field(
+        default_factory=lambda: _entier("MPT_RELAIS_ESSAIS_PAR_HEURE", 30)
+    )
+    relais_depots_par_heure: int = field(
+        default_factory=lambda: _entier("MPT_RELAIS_DEPOTS_PAR_HEURE", 60)
+    )
+
     @property
     def taille_max_octets(self) -> int:
         return self.taille_max_mo * 1024 * 1024
+
+    @property
+    def relais_taille_max_octets(self) -> int:
+        return self.relais_taille_max_mo * 1024 * 1024
 
 
 config = Config()

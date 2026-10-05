@@ -18,6 +18,14 @@ Le moteur est [Audiveris] : moteur OMR en Java, AGPL, le plus abouti des libres.
 [Audiveris]: https://github.com/Audiveris/audiveris
 [oemer]: https://github.com/BreezeWhite/oemer
 
+> **Ajout du 5 octobre 2026 — le relais de partage.** Le service rend
+> maintenant un second service, sans aucun rapport avec le premier : il **relaie
+> une partition d'un appareil à l'autre** (`/api/relais`), pour remplacer les deux
+> QR codes du partage WebRTC par un code à quatre chiffres. Rien n'est écrit sur
+> le disque, rien ne dure plus de trois minutes, et le relais ne touche ni
+> Audiveris ni la JVM : il reste disponible quand la reconnaissance, elle, ne
+> l'est pas. Voir « Le relais de partage » plus bas.
+
 ## Ce que le service fait, et ce qu'il ne fait pas
 
 Il **prépare** l'image (orientation EXIF, HEIC d'iPhone, première page d'un PDF,
@@ -135,6 +143,77 @@ Le compte rendu, une fois terminé :
 Codes d'erreur : `400` requête mal formée, `413` fichier trop lourd, `415` fichier
 illisible comme image, `429` quota par IP, `503` file saturée.
 
+## Le relais de partage
+
+Le site sait déjà envoyer une partition d'un appareil à l'autre sans serveur, par
+un `RTCDataChannel` appairé en se montrant **deux QR codes**. C'est autonome, mais
+cela demande une caméra, une page en HTTPS, le même réseau local, deux scans et une
+comparaison de chiffres. Quand ce service répond, il n'en reste qu'un code à lire
+et un code à taper.
+
+```
+émetteur : POST /api/relais  + un code à 4 chiffres  → montre le code
+receveur : GET  /api/relais/{code}                   → reçoit la partition
+```
+
+| Méthode | Route | Rôle |
+|---|---|---|
+| `POST` | `/api/relais` | dépose une partition. Code dans l'en-tête `X-Code`, nom dans `X-Nom`, **corps en octets bruts**. → `201` + `{code, jeton, octets, resteS}` |
+| `GET` | `/api/relais/{code}` | rend la partition **et la retire** : un code ne sert qu'une fois |
+| `GET` | `/api/relais/jeton/{jeton}` | où en est le dépôt : `en_attente`, `recuperee`, `expiree`, `annulee` |
+| `DELETE` | `/api/relais/jeton/{jeton}` | l'émetteur renonce ; la partition quitte la mémoire tout de suite |
+
+```bash
+# Dépôt
+curl -s -X POST localhost:8077/api/relais \
+     -H 'X-Code: 4271' -H 'X-Nom: Hymne%20a%20la%20joie' \
+     --data-binary @partition.bin
+# → {"code":"4271","jeton":"9f3c…","octets":1518,"resteS":180}
+
+# Récupération — une seule fois
+curl -s localhost:8077/api/relais/4271 -o partition.bin
+curl -s -o /dev/null -w '%{http_code}\n' localhost:8077/api/relais/4271   # → 404
+```
+
+Codes d'erreur : `400` code mal formé ou dépôt vide, `404` code inconnu, expiré ou
+déjà récupéré, `409` **code déjà pris** (le client en tire un autre et recommence),
+`413` trop volumineux, `429` quota, `503` relais désactivé ou saturé.
+
+### Ce que le relais garantit
+
+**Rien n'est persisté.** Pas de fichier, pas de dossier de travaux, pas de volume.
+Une partition vit dans un dictionnaire en mémoire et en disparaît au premier des
+trois évènements suivants : elle est récupérée, l'émetteur annule, ou le délai de
+`MPT_RELAIS_TTL_S` secondes s'écoule. L'échéance est portée par une minuterie
+propre à chaque dépôt, donc l'effacement tombe **à l'heure dite** et non au
+prochain passage d'une boucle de ménage ; une purge paresseuse à chaque accès la
+double, pour que rien de périmé ne puisse être servi même si une minuterie était
+perdue. Le tampon conservé est remis à zéro à l'effacement.
+
+**C'est le client qui tire le code**, avec `crypto.getRandomValues`, et le service
+refuse (`409`) un code déjà en attente. Quatre chiffres, c'est dix mille
+possibilités : ce qui rend leur énumération inexploitable, c'est le quota
+d'**essais erronés** par adresse (`MPT_RELAIS_ESSAIS_PAR_HEURE`). Un code juste ne
+compte pas dans ce quota — sinon un receveur maladroit serait puni d'une faute de
+frappe, et surtout seul l'échec renseigne un attaquant.
+
+**L'usage unique rend un vol visible.** Si quelqu'un devine le code le premier, le
+vrai receveur obtient un `404` au lieu de la partition : l'incident se remarque,
+au lieu de passer inaperçu.
+
+**L'émetteur suit son dépôt par un jeton, jamais par le code.** Sans cela, la route
+de suivi dirait à n'importe qui si un code est pris, et ce serait un oracle
+d'existence à balayer sans limite.
+
+### Ce qu'il ne garantit pas
+
+Le service **voit la partition en clair**. Il n'y a pas de chiffrement de bout en
+bout : avec un secret de quatre chiffres, une clé dérivée se casserait hors ligne
+en quelques millisecondes, et un secret plus long annulerait justement le confort
+qu'on cherche. Le chemin WebRTC, lui, reste chiffré par DTLS — c'est une raison de
+le garder au-delà du simple repli hors ligne, et le site l'offre toujours par un
+bouton.
+
 ## Formats acceptés
 
 JPEG, PNG, TIFF, BMP, WebP, HEIC (iPhone), et la première page d'un PDF. Au delà de
@@ -166,6 +245,18 @@ Tout passe par l'environnement, préfixe `MPT_`.
 | `MPT_DUREE_VIE_MIN` | `60` | rétention d'un résultat avant effacement |
 | `MPT_LIMITE_IP_PAR_HEURE` | `20` | quota par adresse ; `0` désactive |
 | `MPT_FACTICE_DUREE_S` | `1.5` | durée simulée du moteur factice |
+
+Pour le relais de partage — rien de tout cela ne touche le disque :
+
+| Variable | Défaut | Rôle |
+|---|---|---|
+| `MPT_RELAIS` | `1` | `0`, `non`, `false` ou `off` le désactive ; `/api/sante` l'annonce |
+| `MPT_RELAIS_TTL_S` | `180` | durée de vie d'un dépôt ; au delà, le transfert est annulé |
+| `MPT_RELAIS_TAILLE_MAX_MO` | `8` | même plafond que le site (`partage/transfert.ts`) |
+| `MPT_RELAIS_MAX_ATTENTES` | `100` | dépôts simultanés ; au delà, `503` |
+| `MPT_RELAIS_OCTETS_MAX_TOTAL` | `67108864` | volume total en mémoire ; au delà, `503` |
+| `MPT_RELAIS_ESSAIS_PAR_HEURE` | `30` | codes **erronés** tolérés par adresse ; `0` désactive |
+| `MPT_RELAIS_DEPOTS_PAR_HEURE` | `60` | dépôts par adresse ; `0` désactive |
 
 ## Tests
 
@@ -239,6 +330,7 @@ l'utilisateur qui l'a fait.
 app/
   main.py              routes HTTP, CORS, limites de taille
   travaux.py           file d'attente, cycle de vie d'un scan, ménage
+  relais.py            relais de partage : en mémoire, 180 s, usage unique
   image.py             préparation de l'image (EXIF, HEIC, PDF, échelle, contraste)
   analyse.py           compte rendu tiré du MusicXML (mesures suspectes)
   config.py            configuration par variables d'environnement

@@ -1,8 +1,15 @@
-"""API HTTP du service de reconnaissance de partitions.
+"""API HTTP du service : reconnaissance de partitions, et relais de partage.
 
-Starlette plutôt que FastAPI : cinq routes, un seul corps multipart, aucun schéma
-à valider. Cela évite une dépendance et une couche de modèles pour rien. Le
-remplacement par FastAPI, si le besoin vient, ne touche que ce fichier.
+Starlette plutôt que FastAPI : une poignée de routes, un seul corps multipart,
+aucun schéma à valider. Cela évite une dépendance et une couche de modèles pour
+rien. Le remplacement par FastAPI, si le besoin vient, ne touche que ce fichier.
+
+Deux familles de routes, sans rien en commun :
+
+- `/api/scans*` — la reconnaissance optique, longue, en file, sur disque ;
+- `/api/relais*` — le relais de partage entre deux appareils, instantané, en
+  mémoire, effacé au bout de trois minutes. Il ne touche **ni** Audiveris **ni**
+  le disque, et reste donc disponible quand le moteur ne l'est pas.
 """
 
 from __future__ import annotations
@@ -21,6 +28,14 @@ from starlette.routing import Route
 from .config import config
 from .image import HEIC_DISPONIBLE, PDF_DISPONIBLE, ImageInvalide
 from .moteurs import moteur
+from .relais import (
+    CodeInvalide,
+    CodeOccupe,
+    RelaisInactif,
+    RelaisSature,
+    TropDEssais,
+    relais,
+)
 from .travaux import FileSaturee, TropDeRequetes, gestionnaire
 
 logging.basicConfig(
@@ -71,6 +86,9 @@ async def sante(request: Request) -> JSONResponse:
                 "dureeVieMin": config.duree_vie_min,
             },
             "travaux": gestionnaire.etat_global(),
+            # Le relais ne dépend pas du moteur : le site doit pouvoir constater
+            # qu'il peut partager même quand Audiveris n'est pas prêt.
+            "relais": relais.etat_global(),
         }
     )
 
@@ -161,6 +179,94 @@ async def supprimer_scan(request: Request) -> Response:
     return _erreur("Scan inconnu ou expiré.", 404)
 
 
+# --- Relais de partage entre appareils ------------------------------------
+#
+# L'émetteur dépose la partition avec un code à quatre chiffres qu'il a tiré au
+# sort, et reçoit un **jeton** : c'est par lui qu'il suivra ou annulera son
+# dépôt. Le code, lui, ne sert qu'à récupérer, une seule fois.
+
+
+def _ip(request: Request) -> str:
+    return request.client.host if request.client else "inconnue"
+
+
+async def deposer_relais(request: Request) -> JSONResponse:
+    """Dépose une partition sous un code à quatre chiffres. Corps : octets bruts."""
+    code = (request.headers.get("x-code") or "").strip()
+    nom = (request.headers.get("x-nom") or "").strip()
+
+    longueur = request.headers.get("content-length")
+    if longueur is not None and longueur.isdigit() and int(longueur) > config.relais_taille_max_octets:
+        await _vider(request)
+        return _erreur(
+            f"Partition trop volumineuse : maximum {config.relais_taille_max_mo} Mo.", 413
+        )
+
+    donnees = await request.body()
+
+    try:
+        enveloppe = relais.deposer(code, donnees, nom, _ip(request))
+    except RelaisInactif as erreur:
+        return _erreur(str(erreur), 503)
+    except CodeInvalide as erreur:
+        return _erreur(str(erreur), 400)
+    except CodeOccupe as erreur:
+        # 409 et non 400 : le client sait qu'il doit retirer un autre code et
+        # recommencer, ce qu'il fait sans rien demander à l'utilisateur.
+        return _erreur(str(erreur), 409)
+    except TropDEssais as erreur:
+        return _erreur(str(erreur), 429)
+    except RelaisSature as erreur:
+        return _erreur(str(erreur), 503)
+
+    return JSONResponse(
+        {
+            "code": enveloppe.code,
+            "jeton": enveloppe.jeton,
+            "octets": enveloppe.octets,
+            "resteS": enveloppe.reste_s(),
+        },
+        status_code=201,
+    )
+
+
+async def recuperer_relais(request: Request) -> Response:
+    """Rend la partition et **la retire** : un code ne sert qu'une fois."""
+    try:
+        enveloppe = relais.recuperer(request.path_params["code"], _ip(request))
+    except RelaisInactif as erreur:
+        return _erreur(str(erreur), 503)
+    except CodeInvalide as erreur:
+        return _erreur(str(erreur), 400)
+    except TropDEssais as erreur:
+        return _erreur(str(erreur), 429)
+
+    if enveloppe is None:
+        return _erreur(
+            "Aucune partition sous ce code. Il est peut-être expiré, déjà récupéré, ou mal saisi.",
+            404,
+        )
+    return Response(
+        bytes(enveloppe.donnees),
+        media_type="application/octet-stream",
+        headers={"X-Nom": enveloppe.nom, "Cache-Control": "no-store"},
+    )
+
+
+async def suivre_relais(request: Request) -> JSONResponse:
+    """L'émetteur demande où en est son dépôt. Par jeton, jamais par code."""
+    suivi = relais.suivre(request.path_params["jeton"])
+    if suivi is None:
+        return _erreur("Dépôt inconnu ou oublié.", 404)
+    return JSONResponse(suivi)
+
+
+async def annuler_relais(request: Request) -> Response:
+    if relais.annuler(request.path_params["jeton"]):
+        return Response(status_code=204)
+    return _erreur("Dépôt inconnu ou oublié.", 404)
+
+
 routes = [
     Route("/api/sante", sante, methods=["GET"]),
     Route("/api/scans", creer_scan, methods=["POST"]),
@@ -168,6 +274,10 @@ routes = [
     Route("/api/scans/{identifiant}", supprimer_scan, methods=["DELETE"]),
     Route("/api/scans/{identifiant}/musicxml", musicxml_scan, methods=["GET"]),
     Route("/api/scans/{identifiant}/apercu", apercu_scan, methods=["GET"]),
+    Route("/api/relais", deposer_relais, methods=["POST"]),
+    Route("/api/relais/{code}", recuperer_relais, methods=["GET"]),
+    Route("/api/relais/jeton/{jeton}", suivre_relais, methods=["GET"]),
+    Route("/api/relais/jeton/{jeton}", annuler_relais, methods=["DELETE"]),
 ]
 
 middleware = [
@@ -176,6 +286,9 @@ middleware = [
         allow_origins=config.origines,
         allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
         allow_headers=["*"],
+        # Sans cela, le site ne peut pas lire le nom de la partition reçue :
+        # un en-tête de réponse non listé est invisible à `fetch` en cross-origin.
+        expose_headers=["X-Nom", "Location"],
         max_age=3600,
     )
 ]
@@ -192,11 +305,13 @@ def creer_application() -> Starlette:
         max_body_size=config.taille_max_octets * 2,
     )
     logger.info(
-        "Service prêt · moteur=%s prêt=%s · origines=%s · travaux=%s",
+        "Service prêt · moteur=%s prêt=%s · origines=%s · travaux=%s · relais=%s (%d s)",
         moteur().nom,
         moteur().pret(),
         ", ".join(config.origines),
         config.dossier_travaux,
+        "actif" if config.relais_actif else "désactivé",
+        config.relais_ttl_s,
     )
     return application
 
